@@ -1,0 +1,408 @@
+import { useState } from "react";
+import { parseAmount, formatMoney } from "../lib/budget.js";
+import CategoryEditor from "../components/CategoryEditor.jsx";
+import DreamGoalEditor from "../components/DreamGoalEditor.jsx";
+import Modal from "../components/Modal.jsx";
+
+const WEEK_DAYS = [
+  { value: 0, label: "Sunday" },
+  { value: 1, label: "Monday" },
+];
+
+
+
+const card =
+  "rounded-3xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm";
+const input =
+  "w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-950 px-3 py-3 text-gray-900 dark:text-gray-50 focus:outline-none focus:ring-2 focus:ring-sapphire/40";
+
+/** Settings: account, default weekly allowance, week start, currency, category CRUD, backups. */
+export default function Settings({
+  categories,
+  settings,
+  hash,
+  onUpdateSettings,
+  onAddCategory,
+  onEditCategory,
+  onDeleteCategory,
+  onUseAccount,
+  onNewAccount,
+  onSignOut,
+  onExport,
+  onImport,
+}) {
+  const symbol = settings.currencySymbol;
+  const [editing, setEditing] = useState(null);
+  const [accountModal, setAccountModal] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [hashInput, setHashInput] = useState("");
+  const [updating, setUpdating] = useState(false);
+  const [goalModalOpen, setGoalModalOpen] = useState(false);
+
+  // Force the latest version: ask the service worker to update, clear the shell
+  // cache, then reload so fresh files are fetched. Data lives in the cloud and
+  // is untouched.
+  async function checkForUpdates() {
+    setUpdating(true);
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.update().catch(() => {})));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch {
+      /* ignore — reload anyway */
+    } finally {
+      window.location.reload();
+    }
+  }
+
+  function copyHash() {
+    try {
+      navigator.clipboard.writeText(hash);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+
+
+  return (
+    <div className="min-h-full space-y-6 bg-gray-50 px-4 pt-5 pb-4 dark:bg-gray-950">
+      <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-50">Settings</h1>
+
+      <Section title="Account">
+        <div className={`${card} p-4`}>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-sm text-gray-600 dark:text-gray-300">Your account key</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-gray-100 px-3 py-2 font-mono text-xs text-gray-800 dark:bg-gray-950 dark:text-gray-100">
+              {hash}
+            </code>
+            <button
+              onClick={copyHash}
+              className="rounded-lg bg-sapphire px-4 py-2 text-xs font-semibold text-white active:scale-95"
+            >
+              {copied ? "Copied!" : "Copy Key"}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-gray-400">
+            Save this key. Anyone with it can access this account — use it to sign in on another
+            device. There's no password recovery.
+          </p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => {
+                setHashInput("");
+                setAccountModal("switch");
+              }}
+              className="rounded-xl bg-gray-100 py-2.5 text-sm font-semibold text-gray-800 active:scale-[0.99] dark:bg-gray-800 dark:text-gray-100"
+            >
+              Use another key
+            </button>
+            <button
+              onClick={() => setAccountModal("new")}
+              className="rounded-xl bg-gray-100 py-2.5 text-sm font-semibold text-gray-800 active:scale-[0.99] dark:bg-gray-800 dark:text-gray-100"
+            >
+              New account
+            </button>
+          </div>
+          {onSignOut && (
+            <button
+              onClick={() => setAccountModal("signout")}
+              className="mt-2 w-full rounded-xl py-2.5 text-sm font-semibold text-red-500 active:scale-[0.99]"
+            >
+              Sign out
+            </button>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Budget">
+        <Field label="Default weekly allowance">
+          <div className="flex items-center rounded-xl border border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-950">
+            <span className="text-gray-400">{symbol}</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              defaultValue={(settings.weeklyAllowance / 100).toString()}
+              onBlur={(e) => onUpdateSettings({ weeklyAllowance: parseAmount(e.target.value) })}
+              className="w-full bg-transparent px-2 py-3 text-right font-mono font-semibold tabular-nums text-gray-900 focus:outline-none dark:text-gray-50"
+            />
+          </div>
+          <p className="mt-1 px-1 text-xs text-gray-400">
+            Used for any week without its own override. Adjust a single week from the Dashboard.
+          </p>
+        </Field>
+
+        <Field label="Week starts on">
+          <select
+            value={settings.weekStartDay}
+            onChange={(e) => onUpdateSettings({ weekStartDay: Number(e.target.value) })}
+            className={input}
+          >
+            {WEEK_DAYS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Spending days per week">
+          <select
+            value={settings.spendDaysPerWeek || 7}
+            onChange={(e) => onUpdateSettings({ spendDaysPerWeek: Number(e.target.value) })}
+            className={input}
+          >
+            {[1, 2, 3, 4, 5, 6, 7].map((d) => (
+              <option key={d} value={d}>
+                {d} {d === 1 ? "day" : "days"}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 px-1 text-xs text-gray-400">
+            Days you actually spend (e.g. school days). Your daily limit = weekly budget ÷ these
+            days. Override a single week from the Dashboard.
+          </p>
+        </Field>
+
+        <Field label="Currency symbol">
+          <input
+            type="text"
+            maxLength={3}
+            defaultValue={settings.currencySymbol}
+            onBlur={(e) => onUpdateSettings({ currencySymbol: e.target.value.trim() || "₱" })}
+            className={input}
+          />
+        </Field>
+      </Section>
+
+      <Section title="Dream Goal">
+        {settings.dreamGoal ? (
+          <div className={`${card} overflow-hidden`}>
+             <div className="relative aspect-video w-full bg-gray-100 dark:bg-gray-800">
+               <img src={settings.dreamGoal.imageBase64} alt={settings.dreamGoal.name} className="h-full w-full object-cover" />
+               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+               <div className="absolute bottom-3 left-4 right-4 text-white">
+                 <h3 className="font-bold drop-shadow-md">{settings.dreamGoal.name}</h3>
+                 <p className="text-sm font-medium drop-shadow-sm">Target: {formatMoney(settings.dreamGoal.target, symbol)}</p>
+               </div>
+             </div>
+             <div className="flex gap-2 p-3">
+               <button onClick={() => setGoalModalOpen(true)} className="flex-1 rounded-xl bg-gray-100 py-2.5 text-sm font-semibold text-gray-800 active:scale-[0.99] dark:bg-gray-800 dark:text-gray-100">Edit</button>
+               <button onClick={() => onUpdateSettings({ dreamGoal: null })} className="flex-1 rounded-xl bg-red-500/10 py-2.5 text-sm font-semibold text-red-500 active:scale-[0.99]">Remove</button>
+             </div>
+          </div>
+        ) : (
+          <button onClick={() => setGoalModalOpen(true)} className={`${card} flex w-full items-center justify-center gap-2 py-4 text-sm font-semibold text-gray-900 active:scale-[0.99] dark:text-gray-50`}>
+             <span className="text-xl">+</span> Set Dream Goal
+          </button>
+        )}
+        <p className="mt-2 px-1 text-xs text-gray-400">
+          Upload a picture of something you're saving for. It will appear on your dashboard and gradually reveal itself as you stay under budget.
+        </p>
+      </Section>
+
+      <Section title="Categories">
+        <div className={`${card} divide-y divide-gray-100 overflow-hidden dark:divide-gray-800`}>
+          {categories.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setEditing(c)}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-gray-50 dark:active:bg-gray-800/50"
+            >
+              <span
+                className="flex h-9 w-9 items-center justify-center rounded-full text-lg"
+                style={{ backgroundColor: c.color + "22" }}
+              >
+                {c.icon}
+              </span>
+              <span className="flex-1 font-medium text-gray-900 dark:text-gray-50">{c.name}</span>
+              <span className="h-4 w-4 rounded-full" style={{ backgroundColor: c.color }} />
+              <span className="text-sm font-medium text-sapphire">Edit</span>
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setEditing({})}
+          className="mt-3 w-full rounded-2xl border border-dashed border-gray-300 py-3 text-sm font-medium text-gray-500 active:scale-[0.99] dark:border-gray-700 dark:text-gray-400"
+        >
+          + Add category
+        </button>
+      </Section>
+
+      <Section title="Data">
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={onExport}
+            className={`${card} py-3.5 text-sm font-semibold text-gray-900 active:scale-[0.99] dark:text-gray-50`}
+          >
+            Export Data
+          </button>
+          <button
+            onClick={onImport}
+            className={`${card} py-3.5 text-sm font-semibold text-gray-900 active:scale-[0.99] dark:text-gray-50`}
+          >
+            Import Data
+          </button>
+        </div>
+        <p className="mt-2 px-1 text-xs text-gray-400">
+          Backups download/read a JSON file.
+        </p>
+      </Section>
+
+      <Section title="App">
+        <button
+          onClick={checkForUpdates}
+          disabled={updating}
+          className={`${card} flex w-full items-center justify-center gap-2 py-3.5 text-sm font-semibold text-gray-900 active:scale-[0.99] disabled:opacity-60 dark:text-gray-50`}
+        >
+          {updating && (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-sapphire border-t-transparent" />
+          )}
+          {updating ? "Updating…" : "Check for updates"}
+        </button>
+        <p className="mt-2 px-1 text-xs text-gray-400">
+          vaultie caches itself to load instantly and work offline. Tap this if a new version is out
+          and you're still seeing the old one — it clears the cache and reloads. Your data is kept locally on your device.
+        </p>
+      </Section>
+
+      {editing && (
+        <CategoryEditor
+          category={editing.id ? editing : null}
+          canDelete={categories.length > 1}
+          onSave={(payload) => {
+            if (payload.id) onEditCategory(payload.id, payload);
+            else onAddCategory(payload);
+            setEditing(null);
+          }}
+          onDelete={(id) => {
+            onDeleteCategory(id);
+            setEditing(null);
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
+
+      {goalModalOpen && (
+        <DreamGoalEditor
+          dreamGoal={settings.dreamGoal}
+          symbol={symbol}
+          onSave={(dreamGoal) => {
+            onUpdateSettings({ dreamGoal });
+            setGoalModalOpen(false);
+          }}
+          onClose={() => setGoalModalOpen(false)}
+        />
+      )}
+
+      {accountModal === "switch" && (
+        <Modal title="Use another account" onClose={() => setAccountModal(null)}>
+          <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+            Paste an account key to load its data on this device.
+          </p>
+          <input
+            autoFocus
+            value={hashInput}
+            onChange={(e) => setHashInput(e.target.value)}
+            placeholder="account key"
+            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3 font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-sapphire/40 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-50"
+          />
+          <button
+            disabled={!hashInput.trim()}
+            onClick={() => {
+              onUseAccount(hashInput);
+              setAccountModal(null);
+            }}
+            className={`mt-4 w-full rounded-2xl py-3.5 text-base font-semibold transition ${
+              hashInput.trim()
+                ? "bg-sapphire text-white active:scale-[0.99]"
+                : "cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-gray-800"
+            }`}
+          >
+            Load account
+          </button>
+        </Modal>
+      )}
+
+      {accountModal === "signout" && (
+        <Modal title="Sign out of this device?" onClose={() => setAccountModal(null)}>
+          <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">
+            This removes the key from this device and returns to the login screen. Make sure you've copied your key to get back in.
+          </p>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                setAccountModal(null);
+                onSignOut();
+              }}
+              className="w-full rounded-2xl bg-red-500/10 py-3.5 text-base font-semibold text-red-500 active:scale-[0.99]"
+            >
+              Sign out
+            </button>
+            <button
+              onClick={() => setAccountModal(null)}
+              className="w-full rounded-2xl py-3 text-base font-medium text-gray-500 dark:text-gray-400"
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {accountModal === "new" && (
+        <Modal title="Create a new account?" onClose={() => setAccountModal(null)}>
+          <p className="mb-4 text-sm text-gray-600 dark:text-gray-300">
+            This generates a fresh, empty account and switches to it. Your current account isn't
+            deleted — copy its key first if you want to come back to it.
+          </p>
+          <div className="space-y-2">
+            <button
+              onClick={() => {
+                onNewAccount();
+                setAccountModal(null);
+              }}
+              className="w-full rounded-2xl bg-sapphire py-3.5 text-base font-semibold text-white active:scale-[0.99]"
+            >
+              Create new account
+            </button>
+            <button
+              onClick={() => setAccountModal(null)}
+              className="w-full rounded-2xl py-3 text-base font-medium text-gray-500 dark:text-gray-400"
+            >
+              Cancel
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <section>
+      <h2 className="mb-2 px-1 text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+        {title}
+      </h2>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block px-1 text-sm text-gray-600 dark:text-gray-300">{label}</span>
+      {children}
+    </label>
+  );
+}
